@@ -1,24 +1,64 @@
-# Nuxt dev/build outputs
-.output
-.data
-.nuxt
-.nitro
-.cache
-dist
-
-# Node dependencies
-node_modules
-
-# Logs
-logs
-*.log
-
-# Misc
-.DS_Store
-.fleet
-.idea
-
-# Local env files
+# =========================
+# ENV & SECRETS
+# =========================
 .env
 .env.*
 !.env.example
+
+# =========================
+# NODE / NPM
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# NUXT
+# =========================
+.nuxt/
+.output/
+.nitro/
+dist/
+
+# =========================
+# BUILD / CACHE
+# =========================
+.cache/
+.tmp/
+.temp/
+coverage/
+
+# =========================
+# SUPABASE LOCAL (if ever used)
+# =========================
+.supabase/
+.supabase/logs/
+.supabase/storage/
+
+# =========================
+# OS FILES
+# =========================
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# =========================
+# LOG FILES
+# =========================
+*.log
+
+# =========================
+# IDE / EDITOR
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# DATABASE DUMPS (if created)
+# =========================
+*.sql.dump
+*.bak
