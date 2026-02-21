@@ -1,30 +1,26 @@
-import { setCookie } from 'h3'
-import { supabasePublishable } from '../../utils/supabase'
+import { readBody, sendRedirect, createError } from 'h3'
+import { supabaseServer } from '~/server/utils/supabase'
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ email: string; password: string }>(event)
-  const sb = supabasePublishable()
+  const body = await readBody(event)
+  const email = String(body?.email ?? '').trim()
+  const password = String(body?.password ?? '').trim()
 
-  const { data, error } = await sb.auth.signInWithPassword({
-    email: body.email,
-    password: body.password,
-  })
-
-  if (error || !data.session) {
-    throw createError({ statusCode: 401, statusMessage: error?.message ?? 'Login failed' })
+  if (!email || !password) {
+    throw createError({ statusCode: 400, statusMessage: 'Missing email or password' })
   }
 
-  // Store tokens in httpOnly cookies (MVP)
-  setCookie(event, 'sb-access-token', data.session.access_token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    path: '/',
-  })
-  setCookie(event, 'sb-refresh-token', data.session.refresh_token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    path: '/',
-  })
+  const supabase = supabaseServer(event)
 
-  return { ok: true }
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) {
+    // redirect back with message
+    const config = useRuntimeConfig()
+    const base = config.public.siteUrl || ''
+    return sendRedirect(event, `${base}/login?err=${encodeURIComponent(error.message)}`, 303)
+  }
+
+  const config = useRuntimeConfig()
+  const base = config.public.siteUrl || ''
+  return sendRedirect(event, `${base}/`, 303)
 })

@@ -1,7 +1,11 @@
-import { deleteCookie } from 'h3'
+import { sendRedirect } from 'h3'
+import { supabaseServer } from '~/server/utils/supabase'
 
 export default defineEventHandler(async (event) => {
-  deleteCookie(event, 'sb-access-token', { path: '/' })
-  deleteCookie(event, 'sb-refresh-token', { path: '/' })
-  return { ok: true }
+  const supabase = supabaseServer(event)
+  await supabase.auth.signOut()
+
+  const config = useRuntimeConfig()
+  const base = config.public.siteUrl || ''
+  return sendRedirect(event, `${base}/login`, 303)
 })
