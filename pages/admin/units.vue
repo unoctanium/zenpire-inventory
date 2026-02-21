@@ -1,18 +1,13 @@
 <script setup lang="ts">
-type UnitRow = {
-  id: string
-  code: string
-  name: string
-  unit_type: string
-}
+type UnitRow = { id: string; code: string; name: string; unit_type: string }
+type UnitDraft = { code: string; name: string; unit_type: string }
 
 const toast = useToast()
 
-// RBAC check
-const { data: me } = await useFetch('/api/me', { retry: false })
+const { data: me } = await useFetch('/api/me', { retry: false, server: false })
+
 const canManage = computed(() => ((me.value as any)?.permissions ?? []).includes('unit.manage'))
 
-// Fetch units
 const { data: res, pending, error, refresh } =
   await useFetch<{ ok: boolean; units: UnitRow[] }>('/api/admin/units', {
     retry: false,
@@ -21,93 +16,116 @@ const { data: res, pending, error, refresh } =
 
 const units = computed(() => res.value?.units ?? [])
 
-// Modals
-const isCreateOpen = ref(false)
-const isEditOpen = ref(false)
-const isDeleteOpen = ref(false)
-
-const editing = ref<UnitRow | null>(null)
-const deleting = ref<UnitRow | null>(null)
-
-const form = reactive({
-  code: '',
-  name: '',
-  unit_type: 'mass',
-})
-
-const unitTypeOptions = [
+const unitTypeItems = [
   { label: 'mass', value: 'mass' },
   { label: 'volume', value: 'volume' },
   { label: 'count', value: 'count' },
 ]
 
-// TanStack ColumnDef style (Nuxt UI v3 UTable)
-const columns = [
-  { id: 'code', accessorKey: 'code', header: 'Code' },
-  { id: 'name', accessorKey: 'name', header: 'Name' },
-  { id: 'unit_type', accessorKey: 'unit_type', header: 'Type' },
-  { id: 'actions', header: '' },
-]
+// single-row edit model
+const editingId = ref<string | null>(null) // existing id or '__new__'
+const draft = reactive<UnitDraft>({ code: '', name: '', unit_type: 'mass' })
 
-function openCreate() {
-  form.code = ''
-  form.name = ''
-  form.unit_type = 'mass'
-  isCreateOpen.value = true
+const originalRow = computed<UnitRow | null>(() => {
+  if (!editingId.value || editingId.value === '__new__') return null
+  return units.value.find(u => u.id === editingId.value) ?? null
+})
+
+const isEditingNew = computed(() => editingId.value === '__new__')
+const isEditingExisting = computed(() => !!editingId.value && editingId.value !== '__new__')
+
+const draftCode = computed(() => draft.code.trim())
+const draftName = computed(() => draft.name.trim())
+
+const canCommit = computed(() => {
+  if (!editingId.value) return false
+  return draftCode.value.length > 0 && draftName.value.length > 0
+})
+
+const isDirty = computed(() => {
+  if (!editingId.value) return false
+  if (editingId.value === '__new__') {
+    return draftCode.value.length > 0 || draftName.value.length > 0 || draft.unit_type !== 'mass'
+  }
+  const o = originalRow.value
+  if (!o) return false
+  return draft.code !== o.code || draft.name !== o.name || draft.unit_type !== o.unit_type
+})
+
+function resetDraft() {
+  draft.code = ''
+  draft.name = ''
+  draft.unit_type = 'mass'
 }
 
-function openEdit(u: UnitRow) {
-  editing.value = u
-  form.code = u.code
-  form.name = u.name
-  form.unit_type = u.unit_type
-  isEditOpen.value = true
+function startEditRow(row: UnitRow) {
+  if (!canManage.value) return
+  if (editingId.value && isDirty.value) {
+    const ok = window.confirm('Discard current changes?')
+    if (!ok) return
+  }
+  editingId.value = row.id
+  draft.code = row.code
+  draft.name = row.name
+  draft.unit_type = row.unit_type
 }
 
-function openDelete(u: UnitRow) {
-  deleting.value = u
-  isDeleteOpen.value = true
+function startCreate() {
+  if (!canManage.value) return
+  if (editingId.value && isDirty.value) {
+    const ok = window.confirm('Discard current changes?')
+    if (!ok) return
+  }
+  editingId.value = '__new__'
+  resetDraft()
 }
 
-async function createUnit() {
+async function commit() {
+  if (!canManage.value || !editingId.value) return
+
+  // proactive validation (required fields)
+  if (!canCommit.value) {
+    toast.add({
+      title: 'Missing required fields',
+      description: 'Please enter both code and name.',
+      color: 'red',
+    })
+    return
+  }
+
   try {
-    await $fetch('/api/admin/units', { method: 'POST', body: { ...form } })
-    toast.add({ title: 'Unit created' })
-    isCreateOpen.value = false
+    if (editingId.value === '__new__') {
+      await $fetch('/api/admin/units', { method: 'POST', body: { ...draft } })
+    } else {
+      await $fetch(`/api/admin/units/${editingId.value}`, { method: 'PUT', body: { ...draft } })
+    }
+
+    editingId.value = null
+    resetDraft()
     await refresh()
   } catch (e: any) {
     toast.add({
-      title: 'Create failed',
+      title: 'Save failed',
       description: e?.data?.message ?? e?.message ?? String(e),
       color: 'red',
     })
   }
 }
 
-async function updateUnit() {
-  if (!editing.value) return
-  try {
-    await $fetch(`/api/admin/units/${editing.value.id}`, { method: 'PUT', body: { ...form } })
-    toast.add({ title: 'Unit updated' })
-    isEditOpen.value = false
-    editing.value = null
-    await refresh()
-  } catch (e: any) {
-    toast.add({
-      title: 'Update failed',
-      description: e?.data?.message ?? e?.message ?? String(e),
-      color: 'red',
-    })
-  }
+function discard() {
+  if (!editingId.value) return
+  editingId.value = null
+  resetDraft()
 }
 
-async function deleteUnit() {
-  if (!deleting.value) return
+async function deleteRow(row: UnitRow) {
+  if (!canManage.value) return
+
+  const ok = window.confirm(`Delete unit "${row.code}"?`)
+  if (!ok) return
+
   try {
-    await $fetch(`/api/admin/units/${deleting.value.id}`, { method: 'DELETE' })
-    toast.add({ title: 'Unit deleted' })
-    isDeleteOpen.value = false
-    deleting.value = null
+    await $fetch(`/api/admin/units/${row.id}`, { method: 'DELETE' })
     await refresh()
   } catch (e: any) {
     toast.add({
@@ -117,21 +135,27 @@ async function deleteUnit() {
     })
   }
 }
+
+// Styling helpers (for separators + sticky columns)
+const sepR = 'border-r border-zinc-200 dark:border-zinc-800'
+const sepL = 'border-l border-zinc-200 dark:border-zinc-800'
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div class="flex items-start justify-between gap-3">
+  <div class="space-y-4">
+    <div class="flex items-center justify-between gap-3">
       <div>
         <h1 class="text-2xl font-semibold">Units</h1>
         <p class="text-sm text-zinc-500 dark:text-zinc-400">
-          View for logged-in users. Edit requires <code>unit.manage</code>. Delete is DEV_MODE-only (server enforced).
+          Inline row editor. Permission: <code>unit.manage</code>.
         </p>
       </div>
 
       <div class="flex gap-2">
         <UButton size="sm" variant="soft" @click="refresh">Refresh</UButton>
-        <UButton v-if="canManage" size="sm" icon="i-heroicons-plus" @click="openCreate">New unit</UButton>
+        <UButton v-if="canManage" size="sm" icon="i-heroicons-plus" @click="startCreate">
+          Add unit
+        </UButton>
       </div>
     </div>
 
@@ -143,88 +167,143 @@ async function deleteUnit() {
       :description="String(error)"
     />
 
-    <UCard>
-      <!-- ✅ Nuxt UI (TanStack) uses :data, not :rows -->
-      <UTable :columns="columns" :data="units" :loading="pending">
-        <template #actions-data="{ row }">
-          <div class="flex justify-end gap-2">
-            <UButton v-if="canManage" size="xs" variant="soft" @click="openEdit(row)">Edit</UButton>
-            <UButton v-if="canManage" size="xs" color="red" variant="soft" @click="openDelete(row)">Delete</UButton>
-          </div>
-        </template>
-      </UTable>
-    </UCard>
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-auto bg-white dark:bg-zinc-950">
+      <table class="min-w-[720px] w-full text-sm border-separate border-spacing-0">
+        <thead class="sticky top-0 z-20 bg-white dark:bg-zinc-950">
+          <tr>
+            <th
+              class="sticky left-0 z-30 bg-white dark:bg-zinc-950 text-left font-medium px-3 py-2
+                     border-b border-zinc-200 dark:border-zinc-800 w-[140px]"
+              :class="sepR"
+            >
+              Code
+            </th>
+            <th class="text-left font-medium px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 w-[260px]">
+              Name
+            </th>
+            <th class="text-left font-medium px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 w-[160px]">
+              Type
+            </th>
+            <th
+              class="sticky right-0 z-30 bg-white dark:bg-zinc-950 text-right font-medium px-3 py-2
+                     border-b border-zinc-200 dark:border-zinc-800 w-[140px]"
+              :class="sepL"
+            />
+          </tr>
+        </thead>
 
-    <!-- Create Modal -->
-    <UModal v-model="isCreateOpen">
-      <UCard>
-        <template #header>Create unit</template>
+        <tbody>
+          <!-- Draft row -->
+          <tr v-if="isEditingNew" class="bg-zinc-50 dark:bg-zinc-900/20">
+            <td
+              class="sticky left-0 z-10 bg-zinc-50 dark:bg-zinc-900/20 px-3 py-2
+                     border-b border-zinc-100 dark:border-zinc-900"
+              :class="sepR"
+            >
+              <UInput v-model="draft.code" class="text-base" placeholder="e.g. g" />
+            </td>
 
-        <div class="space-y-3">
-          <UFormGroup label="Code">
-            <UInput v-model="form.code" placeholder="e.g. g" />
-          </UFormGroup>
+            <td class="px-3 py-2 border-b border-zinc-100 dark:border-zinc-900">
+              <UInput v-model="draft.name" class="text-base" placeholder="e.g. Gram" />
+            </td>
 
-          <UFormGroup label="Name">
-            <UInput v-model="form.name" placeholder="e.g. Gram" />
-          </UFormGroup>
+            <td class="px-3 py-2 border-b border-zinc-100 dark:border-zinc-900">
+              <USelect v-model="draft.unit_type" :items="unitTypeItems" />
+            </td>
 
-          <UFormGroup label="Type">
-            <USelect v-model="form.unit_type" :options="unitTypeOptions" />
-          </UFormGroup>
-        </div>
+            <td
+              class="sticky right-0 z-10 bg-zinc-50 dark:bg-zinc-900/20 px-3 py-2
+                     border-b border-zinc-100 dark:border-zinc-900"
+              :class="sepL"
+            >
+              <div class="flex justify-end gap-2">
+                <UButton size="xs" icon="i-heroicons-check" :disabled="!canCommit" @click="commit" />
+                <UButton size="xs" variant="ghost" icon="i-heroicons-x-mark" @click="discard" />
+              </div>
+            </td>
+          </tr>
 
-        <template #footer>
-          <div class="flex justify-end gap-2">
-            <UButton color="gray" variant="soft" @click="isCreateOpen = false">Cancel</UButton>
-            <UButton @click="createUnit">Create</UButton>
-          </div>
-        </template>
-      </UCard>
-    </UModal>
+          <!-- Existing rows -->
+          <tr v-for="row in units" :key="row.id">
+            <td
+              class="sticky left-0 z-10 bg-white dark:bg-zinc-950 px-3 py-2
+                     border-b border-zinc-100 dark:border-zinc-900"
+              :class="sepR"
+            >
+              <template v-if="editingId === row.id">
+                <UInput v-model="draft.code" class="text-base" />
+              </template>
+              <template v-else>
+                <span class="font-medium">{{ row.code }}</span>
+              </template>
+            </td>
 
-    <!-- Edit Modal -->
-    <UModal v-model="isEditOpen">
-      <UCard>
-        <template #header>Edit unit</template>
+            <td class="px-3 py-2 border-b border-zinc-100 dark:border-zinc-900">
+              <template v-if="editingId === row.id">
+                <UInput v-model="draft.name" class="text-base" />
+              </template>
+              <template v-else>
+                {{ row.name }}
+              </template>
+            </td>
 
-        <div class="space-y-3">
-          <UFormGroup label="Code">
-            <UInput v-model="form.code" />
-          </UFormGroup>
+            <td class="px-3 py-2 border-b border-zinc-100 dark:border-zinc-900">
+              <template v-if="editingId === row.id">
+                <USelect v-model="draft.unit_type" :items="unitTypeItems" />
+              </template>
+              <template v-else>
+                {{ row.unit_type }}
+              </template>
+            </td>
 
-          <UFormGroup label="Name">
-            <UInput v-model="form.name" />
-          </UFormGroup>
+            <td
+              class="sticky right-0 z-10 bg-white dark:bg-zinc-950 px-3 py-2
+                     border-b border-zinc-100 dark:border-zinc-900"
+              :class="sepL"
+            >
+              <div class="flex justify-end gap-2">
+                <template v-if="editingId === row.id">
+                  <UButton size="xs" icon="i-heroicons-check" :disabled="!canCommit" @click="commit" />
+                  <UButton size="xs" variant="ghost" icon="i-heroicons-x-mark" @click="discard" />
+                  <UButton
+                    size="xs"
+                    color="red"
+                    variant="ghost"
+                    icon="i-heroicons-trash"
+                    @click="deleteRow(row)"
+                  />
+                </template>
 
-          <UFormGroup label="Type">
-            <USelect v-model="form.unit_type" :options="unitTypeOptions" />
-          </UFormGroup>
-        </div>
+                <template v-else>
+                  <UButton
+                    size="xs"
+                    variant="ghost"
+                    icon="i-heroicons-pencil-square"
+                    :disabled="!canManage"
+                    @click="startEditRow(row)"
+                  />
+                  <UButton
+                    size="xs"
+                    color="red"
+                    variant="ghost"
+                    icon="i-heroicons-trash"
+                    :disabled="!canManage"
+                    @click="deleteRow(row)"
+                  />
+                </template>
+              </div>
+            </td>
+          </tr>
 
-        <template #footer>
-          <div class="flex justify-end gap-2">
-            <UButton color="gray" variant="soft" @click="isEditOpen = false">Cancel</UButton>
-            <UButton @click="updateUnit">Save</UButton>
-          </div>
-        </template>
-      </UCard>
-    </UModal>
+          <tr v-if="!pending && units.length === 0 && !isEditingNew">
+            <td colspan="4" class="px-3 py-4 text-zinc-500 dark:text-zinc-400">No units yet.</td>
+          </tr>
 
-    <!-- Delete Modal -->
-    <UModal v-model="isDeleteOpen">
-      <UCard>
-        <template #header>Delete unit</template>
-
-        <p>Delete <strong>{{ deleting?.code }}</strong> ({{ deleting?.name }})?</p>
-
-        <template #footer>
-          <div class="flex justify-end gap-2">
-            <UButton color="gray" variant="soft" @click="isDeleteOpen = false">Cancel</UButton>
-            <UButton color="red" @click="deleteUnit">Delete</UButton>
-          </div>
-        </template>
-      </UCard>
-    </UModal>
+          <tr v-if="pending">
+            <td colspan="4" class="px-3 py-4 text-zinc-500 dark:text-zinc-400">Loading…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
