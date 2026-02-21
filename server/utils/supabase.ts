@@ -36,4 +36,4 @@ export function supabaseServer(event: H3Event) {
       },
     }
   )
-}}
+}
